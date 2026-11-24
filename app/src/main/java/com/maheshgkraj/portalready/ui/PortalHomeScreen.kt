@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import com.maheshgkraj.portalready.engine.ExactImageProcessor
 import com.maheshgkraj.portalready.engine.ProcessedResult
 import com.maheshgkraj.portalready.model.DocType
+import com.maheshgkraj.portalready.model.PortalPreset
 import com.maheshgkraj.portalready.model.PresetCatalog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -87,6 +88,19 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
 
     var selectedPreset by remember { mutableStateOf(PresetCatalog.allPresets.first()) }
+    var isCustomMode by remember { mutableStateOf(false) }
+
+    // Custom spec inputs
+    var customWidth by remember { mutableStateOf("300") }
+    var customHeight by remember { mutableStateOf("400") }
+    var customMinKb by remember { mutableStateOf("15") }
+    var customMaxKb by remember { mutableStateOf("50") }
+    var customShowDate by remember { mutableStateOf(false) }
+
+    // Framing controls
+    var zoomLevel by remember { mutableFloatStateOf(1.0f) }
+    var verticalOffset by remember { mutableFloatStateOf(0.0f) }
+
     var rawBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var result by remember { mutableStateOf<ProcessedResult?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
@@ -96,32 +110,60 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
     var candidateName by remember { mutableStateOf("") }
     var photoDate by remember { mutableStateOf("") }
 
+    val activeSpec = remember(
+        selectedPreset, isCustomMode, customWidth, customHeight, customMinKb, customMaxKb, customShowDate
+    ) {
+        if (!isCustomMode) {
+            selectedPreset
+        } else {
+            val w = (customWidth.toIntOrNull() ?: 300).coerceIn(50, 2000)
+            val h = (customHeight.toIntOrNull() ?: 400).coerceIn(50, 2000)
+            val minK = (customMinKb.toIntOrNull() ?: 10).coerceIn(2, 2000)
+            val maxK = (customMaxKb.toIntOrNull() ?: 50).coerceIn(minK + 1, 5000)
+            PortalPreset(
+                id = "custom_${w}x${h}",
+                title = "Custom Specification",
+                subtitle = "${w}x${h} px • $minK KB - $maxK KB",
+                category = "Custom",
+                docType = DocType.PHOTO,
+                widthPx = w,
+                heightPx = h,
+                minKb = minK,
+                maxKb = maxK,
+                requiresWhiteBg = true,
+                supportsDateStamp = customShowDate
+            )
+        }
+    }
+
     fun reprocess() {
         val src = rawBitmap ?: return
         scope.launch {
             isProcessing = true
             val processed = withContext(Dispatchers.Default) {
                 var working = src
-                if (selectedPreset.docType == DocType.PHOTO && enableWhiteBg) {
+                if (activeSpec.docType == DocType.PHOTO && enableWhiteBg) {
                     working = runCatching {
                         ExactImageProcessor.applyStudioWhiteBackground(working)
                     }.getOrDefault(working)
                 }
-                if (selectedPreset.docType == DocType.SIGNATURE && enableSigClean) {
+                if (activeSpec.docType == DocType.SIGNATURE && enableSigClean) {
                     working = ExactImageProcessor.cleanSignature(working)
                 }
-                working = ExactImageProcessor.centerCropAndScale(
-                    working,
-                    selectedPreset.widthPx,
-                    selectedPreset.heightPx
+                working = ExactImageProcessor.framedCropAndScale(
+                    source = working,
+                    targetWidth = activeSpec.widthPx,
+                    targetHeight = activeSpec.heightPx,
+                    zoom = zoomLevel,
+                    verticalBias = verticalOffset
                 )
-                if (selectedPreset.supportsDateStamp) {
+                if (activeSpec.supportsDateStamp) {
                     working = ExactImageProcessor.stampNameAndDate(working, candidateName, photoDate)
                 }
                 ExactImageProcessor.compressToExactRange(
                     working,
-                    selectedPreset.minKb,
-                    selectedPreset.maxKb
+                    activeSpec.minKb,
+                    activeSpec.maxKb
                 )
             }
             result = processed
@@ -142,6 +184,8 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
                 MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
             }
             rawBitmap = bmp
+            zoomLevel = 1.0f
+            verticalOffset = 0.0f
             reprocess()
         }
     }
@@ -152,6 +196,7 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
             .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // 1. Live Output Card
         item {
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -162,12 +207,12 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = selectedPreset.title,
+                        text = activeSpec.title,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = selectedPreset.subtitle,
+                        text = activeSpec.subtitle,
                         style = MaterialTheme.typography.bodySmall
                     )
 
@@ -205,7 +250,7 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
 
                     Spacer(Modifier.height(12.dp))
 
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
                             onClick = {
                                 photoPicker.launch(
@@ -215,23 +260,33 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.PhotoCamera, contentDescription = null)
-                            Spacer(Modifier.width(6.dp))
-                            Text(if (rawBitmap == null) "Select Photo" else "Change")
+                            Spacer(Modifier.width(4.dp))
+                            Text(if (rawBitmap == null) "Pick Photo" else "Change")
                         }
 
                         if (result != null) {
                             FilledTonalButton(
                                 onClick = {
                                     val res = result ?: return@FilledTonalButton
-                                    val name = "${selectedPreset.id}_${res.finalSizeKb.toInt()}KB.jpg"
+                                    val name = "${activeSpec.id}_${res.finalSizeKb.toInt()}KB.jpg"
                                     ExactImageProcessor.saveToGallery(context, res.bytes, name)
                                     Toast.makeText(context, "Saved to Pictures/PortalReady/$name", Toast.LENGTH_LONG).show()
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(Icons.Default.Download, contentDescription = null)
-                                Spacer(Modifier.width(6.dp))
-                                Text("Save JPG")
+                                Spacer(Modifier.width(4.dp))
+                                Text("Save")
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    val res = result ?: return@IconButton
+                                    val name = "${activeSpec.id}_${res.finalSizeKb.toInt()}KB.jpg"
+                                    ExactImageProcessor.shareImage(context, res.bytes, name)
+                                }
+                            ) {
+                                Icon(Icons.Default.Share, contentDescription = "Share")
                             }
                         }
                     }
@@ -239,10 +294,40 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
             }
         }
 
+        // 2. Interactive Framing & Enhancement Controls
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    if (selectedPreset.docType == DocType.PHOTO) {
+                    if (rawBitmap != null) {
+                        Text(
+                            "Framing & Alignment",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Zoom", modifier = Modifier.width(64.dp), style = MaterialTheme.typography.bodySmall)
+                            Slider(
+                                value = zoomLevel,
+                                onValueChange = { zoomLevel = it },
+                                onValueChangeFinished = { reprocess() },
+                                valueRange = 1.0f..2.2f,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Position", modifier = Modifier.width(64.dp), style = MaterialTheme.typography.bodySmall)
+                            Slider(
+                                value = verticalOffset,
+                                onValueChange = { verticalOffset = it },
+                                onValueChangeFinished = { reprocess() },
+                                valueRange = -1.0f..1.0f,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                    }
+
+                    if (activeSpec.docType == DocType.PHOTO) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -254,11 +339,11 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
                                 onCheckedChange = { enableWhiteBg = it; reprocess() }
                             )
                         }
-                        if (selectedPreset.supportsDateStamp) {
+                        if (activeSpec.supportsDateStamp) {
                             OutlinedTextField(
                                 value = candidateName,
                                 onValueChange = { candidateName = it; reprocess() },
-                                label = { Text("Candidate Name (Optional)") },
+                                label = { Text("Candidate Name") },
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
                             )
@@ -288,20 +373,97 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
             }
         }
 
+        // 3. Custom Mode Toggle & Inputs
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = if (isCustomMode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+                )
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Custom Size & KB Mode", fontWeight = FontWeight.Bold)
+                            Text("For any college, bank, or private form", style = MaterialTheme.typography.bodySmall)
+                        }
+                        Switch(
+                            checked = isCustomMode,
+                            onCheckedChange = { isCustomMode = it; reprocess() }
+                        )
+                    }
+
+                    if (isCustomMode) {
+                        Spacer(Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = customWidth,
+                                onValueChange = { customWidth = it.filter(Char::isDigit); reprocess() },
+                                label = { Text("Width (px)") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = customHeight,
+                                onValueChange = { customHeight = it.filter(Char::isDigit); reprocess() },
+                                label = { Text("Height (px)") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = customMinKb,
+                                onValueChange = { customMinKb = it.filter(Char::isDigit); reprocess() },
+                                label = { Text("Min KB") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = customMaxKb,
+                                onValueChange = { customMaxKb = it.filter(Char::isDigit); reprocess() },
+                                label = { Text("Max KB") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Add Name & Date Bar")
+                            Switch(
+                                checked = customShowDate,
+                                onCheckedChange = { customShowDate = it; reprocess() }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Preset Selector List
         item {
             Text(
-                "Select Exam / Portal Specification",
+                "Exam & Portal Presets",
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold
             )
         }
 
         items(PresetCatalog.allPresets) { preset ->
-            val isSelected = preset.id == selectedPreset.id
+            val isSelected = !isCustomMode && preset.id == selectedPreset.id
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable {
+                        isCustomMode = false
                         selectedPreset = preset
                         reprocess()
                     },

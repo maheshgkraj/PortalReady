@@ -2,10 +2,12 @@ package com.maheshgkraj.portalready.engine
 
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.graphics.*
 import android.net.Uri
 import android.os.Environment
 import android.provider.MediaStore
+import androidx.core.content.FileProvider
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions
@@ -13,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.io.File
 import kotlin.math.max
 
 data class ProcessedResult(
@@ -63,15 +66,28 @@ object ExactImageProcessor {
         }
     }
 
-    fun centerCropAndScale(source: Bitmap, targetWidth: Int, targetHeight: Int): Bitmap {
-        val scale = max(
+    /**
+     * Crop and scale with interactive zoom (1.0f..2.2f) and vertical alignment (-1.0f..1.0f)
+     */
+    fun framedCropAndScale(
+        source: Bitmap,
+        targetWidth: Int,
+        targetHeight: Int,
+        zoom: Float = 1.0f,
+        verticalBias: Float = 0.0f
+    ): Bitmap {
+        val baseScale = max(
             targetWidth.toFloat() / source.width,
             targetHeight.toFloat() / source.height
         )
-        val scaledWidth = scale * source.width
-        val scaledHeight = scale * source.height
+        val finalScale = baseScale * zoom.coerceIn(1.0f, 2.5f)
+        val scaledWidth = finalScale * source.width
+        val scaledHeight = finalScale * source.height
+
         val left = (targetWidth - scaledWidth) / 2f
-        val top = (targetHeight - scaledHeight) / 2f
+        val maxShiftY = max(0f, (scaledHeight - targetHeight) / 2f)
+        val centerTop = (targetHeight - scaledHeight) / 2f
+        val top = centerTop + (verticalBias.coerceIn(-1f, 1f) * maxShiftY)
 
         val destRect = RectF(left, top, left + scaledWidth, top + scaledHeight)
         val output = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
@@ -176,5 +192,19 @@ object ExactImageProcessor {
         val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return null
         resolver.openOutputStream(uri)?.use { it.write(bytes) }
         return uri
+    }
+
+    fun shareImage(context: Context, bytes: ByteArray, fileName: String) {
+        val shareDir = File(context.cacheDir, "shared").apply { mkdirs() }
+        val file = File(shareDir, fileName)
+        file.writeBytes(bytes)
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            type = "image/jpeg"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(Intent.createChooser(intent, "Share PortalReady Image"))
     }
 }

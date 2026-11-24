@@ -16,9 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,6 +39,50 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PortalHomeScreen() {
+    var currentTab by remember { mutableIntStateOf(0) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("PortalReady", fontWeight = FontWeight.Bold)
+                        Text(
+                            "100% Offline • Exact KB & Exam Specs",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            )
+        },
+        bottomBar = {
+            NavigationBar {
+                NavigationBarItem(
+                    selected = currentTab == 0,
+                    onClick = { currentTab = 0 },
+                    icon = { Icon(Icons.Default.Badge, contentDescription = null) },
+                    label = { Text("Photo & Sign") }
+                )
+                NavigationBarItem(
+                    selected = currentTab == 1,
+                    onClick = { currentTab = 1 },
+                    icon = { Icon(Icons.Default.PictureAsPdf, contentDescription = null) },
+                    label = { Text("PDF Merger") }
+                )
+            }
+        }
+    ) { padding ->
+        if (currentTab == 0) {
+            PhotoAndSignatureTab(modifier = Modifier.padding(padding))
+        } else {
+            PdfMergerScreen(modifier = Modifier.padding(padding))
+        }
+    }
+}
+
+@Composable
+private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
@@ -104,201 +146,183 @@ fun PortalHomeScreen() {
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text("PortalReady", fontWeight = FontWeight.Bold)
-                        Text(
-                            "100% Offline • Exact KB & Exam Specs",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    LazyColumn(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = selectedPreset.title,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = selectedPreset.subtitle,
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                    Text(
+                        text = selectedPreset.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = selectedPreset.subtitle,
+                        style = MaterialTheme.typography.bodySmall
+                    )
 
-                        Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(12.dp))
 
-                        if (isProcessing) {
-                            CircularProgressIndicator()
-                        } else if (result != null) {
-                            val res = result!!
-                            Image(
-                                bitmap = res.previewBitmap.asImageBitmap(),
-                                contentDescription = "Processed Preview",
-                                modifier = Modifier
-                                    .height(160.dp)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(Color.White)
+                    if (isProcessing) {
+                        CircularProgressIndicator()
+                    } else if (result != null) {
+                        val res = result!!
+                        Image(
+                            bitmap = res.previewBitmap.asImageBitmap(),
+                            contentDescription = "Processed Preview",
+                            modifier = Modifier
+                                .height(160.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White)
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF1B873F))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = String.format(
+                                    Locale.US,
+                                    "VERIFIED: %dx%d px • %.1f KB",
+                                    res.width,
+                                    res.height,
+                                    res.finalSizeKb
+                                ),
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1B873F)
                             )
-                            Spacer(Modifier.height(8.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF1B873F))
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = String.format(
-                                        Locale.US,
-                                        "VERIFIED: %dx%d px • %.1f KB",
-                                        res.width,
-                                        res.height,
-                                        res.finalSizeKb
-                                    ),
-                                    fontWeight = FontWeight.Bold,
-                                    color = Color(0xFF1B873F)
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Button(
+                            onClick = {
+                                photoPicker.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
-                            }
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.PhotoCamera, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (rawBitmap == null) "Select Photo" else "Change")
                         }
 
-                        Spacer(Modifier.height(12.dp))
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Button(
+                        if (result != null) {
+                            FilledTonalButton(
                                 onClick = {
-                                    photoPicker.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
+                                    val res = result ?: return@FilledTonalButton
+                                    val name = "${selectedPreset.id}_${res.finalSizeKb.toInt()}KB.jpg"
+                                    ExactImageProcessor.saveToGallery(context, res.bytes, name)
+                                    Toast.makeText(context, "Saved to Pictures/PortalReady/$name", Toast.LENGTH_LONG).show()
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.PhotoCamera, contentDescription = null)
+                                Icon(Icons.Default.Download, contentDescription = null)
                                 Spacer(Modifier.width(6.dp))
-                                Text(if (rawBitmap == null) "Select Photo" else "Change")
-                            }
-
-                            if (result != null) {
-                                FilledTonalButton(
-                                    onClick = {
-                                        val res = result ?: return@FilledTonalButton
-                                        val name = "${selectedPreset.id}_${res.finalSizeKb.toInt()}KB.jpg"
-                                        ExactImageProcessor.saveToGallery(context, res.bytes, name)
-                                        Toast.makeText(context, "Saved to Pictures/PortalReady/$name", Toast.LENGTH_LONG).show()
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Icon(Icons.Default.Download, contentDescription = null)
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Save JPG")
-                                }
+                                Text("Save JPG")
                             }
                         }
                     }
                 }
             }
-
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        if (selectedPreset.docType == DocType.PHOTO) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("AI Studio White Background")
-                                Switch(
-                                    checked = enableWhiteBg,
-                                    onCheckedChange = { enableWhiteBg = it; reprocess() }
-                                )
-                            }
-                            if (selectedPreset.supportsDateStamp) {
-                                OutlinedTextField(
-                                    value = candidateName,
-                                    onValueChange = { candidateName = it; reprocess() },
-                                    label = { Text("Candidate Name (Optional)") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true
-                                )
-                                Spacer(Modifier.height(8.dp))
-                                OutlinedTextField(
-                                    value = photoDate,
-                                    onValueChange = { photoDate = it; reprocess() },
-                                    label = { Text("Date of Photo (DD-MM-YYYY)") },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true
-                                )
-                            }
-                        } else {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("Remove Paper Shadow (Pure Black Ink)")
-                                Switch(
-                                    checked = enableSigClean,
-                                    onCheckedChange = { enableSigClean = it; reprocess() }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            item {
-                Text(
-                    "Select Exam / Portal Specification",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            items(PresetCatalog.allPresets) { preset ->
-                val isSelected = preset.id == selectedPreset.id
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            selectedPreset = preset
-                            reprocess()
-                        },
-                    shape = RoundedCornerShape(10.dp),
-                    color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                    tonalElevation = 2.dp
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(preset.title, fontWeight = FontWeight.SemiBold)
-                            Text(preset.subtitle, style = MaterialTheme.typography.bodySmall)
-                        }
-                        AssistChip(onClick = {}, label = { Text(preset.category) })
-                    }
-                }
-            }
-
-            item { Spacer(Modifier.height(24.dp)) }
         }
+
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    if (selectedPreset.docType == DocType.PHOTO) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("AI Studio White Background")
+                            Switch(
+                                checked = enableWhiteBg,
+                                onCheckedChange = { enableWhiteBg = it; reprocess() }
+                            )
+                        }
+                        if (selectedPreset.supportsDateStamp) {
+                            OutlinedTextField(
+                                value = candidateName,
+                                onValueChange = { candidateName = it; reprocess() },
+                                label = { Text("Candidate Name (Optional)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = photoDate,
+                                onValueChange = { photoDate = it; reprocess() },
+                                label = { Text("Date of Photo (DD-MM-YYYY)") },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Remove Paper Shadow (Pure Black Ink)")
+                            Switch(
+                                checked = enableSigClean,
+                                onCheckedChange = { enableSigClean = it; reprocess() }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
+            Text(
+                "Select Exam / Portal Specification",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        items(PresetCatalog.allPresets) { preset ->
+            val isSelected = preset.id == selectedPreset.id
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        selectedPreset = preset
+                        reprocess()
+                    },
+                shape = RoundedCornerShape(10.dp),
+                color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                tonalElevation = 2.dp
+            ) {
+                Row(
+                    modifier = Modifier.padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(preset.title, fontWeight = FontWeight.SemiBold)
+                        Text(preset.subtitle, style = MaterialTheme.typography.bodySmall)
+                    }
+                    AssistChip(onClick = {}, label = { Text(preset.category) })
+                }
+            }
+        }
+
+        item { Spacer(Modifier.height(24.dp)) }
     }
 }

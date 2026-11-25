@@ -9,6 +9,8 @@ import android.os.Environment
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions
 import kotlinx.coroutines.Dispatchers
@@ -17,17 +19,64 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 data class ProcessedResult(
     val bytes: ByteArray,
     val previewBitmap: Bitmap,
     val finalSizeKb: Float,
     val width: Int,
-    val height: Int
+    val height: Int,
+    val faceDetected: Boolean = false
 )
 
 object ExactImageProcessor {
 
+    fun createCameraCaptureUri(context: Context): Uri {
+        val captureDir = File(context.cacheDir, "shared").apply { mkdirs() }
+        val file = File(captureDir, "camera_raw_${System.currentTimeMillis()}.jpg")
+        return FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    }
+
+    /**
+     * 1. ML Kit Face Detection: auto-crops source around the detected face so head & shoulders
+     *    match official passport framing (~75% coverage) before final resize.
+     */
+    suspend fun autoCenterFace(source: Bitmap): Pair<Bitmap, Boolean> = withContext(Dispatchers.Default) {
+        val options = FaceDetectorOptions.Builder()
+            .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
+            .build()
+        val detector = FaceDetection.getClient(options)
+        val inputImage = InputImage.fromBitmap(source, 0)
+
+        val faces = runCatching { detector.process(inputImage).await() }.getOrDefault(emptyList())
+        val face = faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }
+            ?: return@withContext (source to false)
+
+        val box = face.boundingBox
+        val faceCenterX = box.exactCenterX()
+        // Shift slightly below eye/nose center to include collar/shoulders naturally
+        val passportCenterY = box.exactCenterY() + (box.height() * 0.14f)
+
+        // Target crop height = ~2.1x face height so face fills ~50-75% of passport frame
+        val desiredCropH = (box.height() * 2.15f).coerceIn(box.height().toFloat(), source.height.toFloat())
+        val desiredCropW = desiredCropH * 0.85f
+
+        val halfW = desiredCropW / 2f
+        val halfH = desiredCropH / 2f
+
+        val left = (faceCenterX - halfW).coerceIn(0f, max(0f, source.width - desiredCropW)).roundToInt()
+        val top = (passportCenterY - halfH).coerceIn(0f, max(0f, source.height - desiredCropH)).roundToInt()
+        val cropW = desiredCropW.roundToInt().coerceIn(1, source.width - left)
+        val cropH = desiredCropH.roundToInt().coerceIn(1, source.height - top)
+
+        val cropped = Bitmap.createBitmap(source, left, top, cropW, cropH)
+        (cropped to true)
+    }
+
+    /**
+     * 2. AI Studio White Background Replacement using on-device ML Kit Subject Segmentation
+     */
     suspend fun applyStudioWhiteBackground(source: Bitmap): Bitmap = withContext(Dispatchers.Default) {
         val options = SubjectSegmenterOptions.Builder()
             .enableForegroundBitmap()
@@ -45,6 +94,9 @@ object ExactImageProcessor {
         output
     }
 
+    /**
+     * 3. Signature High-Contrast Shadow Cleaner
+     */
     fun cleanSignature(source: Bitmap, threshold: Int = 145): Bitmap {
         val width = source.width
         val height = source.height
@@ -67,7 +119,7 @@ object ExactImageProcessor {
     }
 
     /**
-     * Crop and scale with interactive zoom (1.0f..2.2f) and vertical alignment (-1.0f..1.0f)
+     * 4. Framed Crop & Scale with interactive Zoom & Vertical Alignment
      */
     fun framedCropAndScale(
         source: Bitmap,
@@ -97,6 +149,9 @@ object ExactImageProcessor {
         return output
     }
 
+    /**
+     * 5. Candidate Name & Date of Photo (DOP) Strip Stamper
+     */
     fun stampNameAndDate(photo: Bitmap, candidateName: String, dateText: String): Bitmap {
         if (candidateName.isBlank() && dateText.isBlank()) return photo
 
@@ -136,10 +191,34 @@ object ExactImageProcessor {
         return result
     }
 
+    /**
+     * 6. Patches JFIF APP0 header to report exact 300 DPI (required by PAN / Passport portals)
+     */
+    private fun setJpegDpi(jpegBytes: ByteArray, dpi: Int = 300): ByteArray {
+        if (jpegBytes.size > 18 &&
+            jpegBytes[0] == 0xFF.toByte() && jpegBytes[1] == 0xD8.toByte() &&
+            jpegBytes[2] == 0xFF.toByte() && jpegBytes[3] == 0xE0.toByte() &&
+            jpegBytes[6] == 'J'.code.toByte() && jpegBytes[7] == 'F'.code.toByte()
+        ) {
+            val copy = jpegBytes.copyOf()
+            copy[13] = 1 // Units: dots per inch
+            copy[14] = ((dpi shr 8) and 0xFF).toByte()
+            copy[15] = (dpi and 0xFF).toByte()
+            copy[16] = ((dpi shr 8) and 0xFF).toByte()
+            copy[17] = (dpi and 0xFF).toByte()
+            return copy
+        }
+        return jpegBytes
+    }
+
+    /**
+     * 7. Binary-Search Exact KB Compressor + 300 DPI Header Stamp
+     */
     fun compressToExactRange(
         bitmap: Bitmap,
         minKb: Int,
-        maxKb: Int
+        maxKb: Int,
+        faceDetected: Boolean = false
     ): ProcessedResult {
         var low = 5
         var high = 100
@@ -164,6 +243,8 @@ object ExactImageProcessor {
             bitmap.compress(Bitmap.CompressFormat.JPEG, 5, it)
         }.toByteArray()
 
+        finalBytes = setJpegDpi(finalBytes, 300)
+
         val minBytes = minKb * 1024
         if (finalBytes.size < minBytes) {
             val padNeeded = (minBytes - finalBytes.size) + 512
@@ -178,7 +259,8 @@ object ExactImageProcessor {
             previewBitmap = decoded,
             finalSizeKb = finalBytes.size / 1024f,
             width = bitmap.width,
-            height = bitmap.height
+            height = bitmap.height,
+            faceDetected = faceDetected
         )
     }
 

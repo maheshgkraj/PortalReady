@@ -2,6 +2,7 @@ package com.maheshgkraj.portalready.ui
 
 import android.graphics.Bitmap
 import android.graphics.ImageDecoder
+import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
 import android.widget.Toast
@@ -49,7 +50,7 @@ fun PortalHomeScreen() {
                     Column {
                         Text("PortalReady", fontWeight = FontWeight.Bold)
                         Text(
-                            "100% Offline • Exact KB & Exam Specs",
+                            "100% Offline • Exact KB, 300 DPI & Exam Specs",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -102,10 +103,12 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
     var verticalOffset by remember { mutableFloatStateOf(0.0f) }
 
     var rawBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var result by remember { mutableStateOf<ProcessedResult?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
 
     var enableWhiteBg by remember { mutableStateOf(true) }
+    var enableAutoFaceCenter by remember { mutableStateOf(true) }
     var enableSigClean by remember { mutableStateOf(true) }
     var candidateName by remember { mutableStateOf("") }
     var photoDate by remember { mutableStateOf("") }
@@ -123,7 +126,7 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
             PortalPreset(
                 id = "custom_${w}x${h}",
                 title = "Custom Specification",
-                subtitle = "${w}x${h} px • $minK KB - $maxK KB",
+                subtitle = "${w}x${h} px • $minK KB - $maxK KB • 300 DPI",
                 category = "Custom",
                 docType = DocType.PHOTO,
                 widthPx = w,
@@ -142,6 +145,13 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
             isProcessing = true
             val processed = withContext(Dispatchers.Default) {
                 var working = src
+                var faceFound = false
+
+                if (activeSpec.docType == DocType.PHOTO && enableAutoFaceCenter) {
+                    val (centered, detected) = ExactImageProcessor.autoCenterFace(working)
+                    working = centered
+                    faceFound = detected
+                }
                 if (activeSpec.docType == DocType.PHOTO && enableWhiteBg) {
                     working = runCatching {
                         ExactImageProcessor.applyStudioWhiteBackground(working)
@@ -161,9 +171,10 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
                     working = ExactImageProcessor.stampNameAndDate(working, candidateName, photoDate)
                 }
                 ExactImageProcessor.compressToExactRange(
-                    working,
-                    activeSpec.minKb,
-                    activeSpec.maxKb
+                    bitmap = working,
+                    minKb = activeSpec.minKb,
+                    maxKb = activeSpec.maxKb,
+                    faceDetected = faceFound
                 )
             }
             result = processed
@@ -171,22 +182,33 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
         }
     }
 
+    fun loadUriAndProcess(uri: Uri) {
+        val bmp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, _, _ ->
+                decoder.isMutableRequired = true
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
+        }
+        rawBitmap = bmp
+        zoomLevel = 1.0f
+        verticalOffset = 0.0f
+        reprocess()
+    }
+
     val photoPicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        if (uri != null) {
-            val bmp = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                ImageDecoder.decodeBitmap(ImageDecoder.createSource(context.contentResolver, uri)) { decoder, _, _ ->
-                    decoder.isMutableRequired = true
-                }
-            } else {
-                @Suppress("DEPRECATION")
-                MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
-            }
-            rawBitmap = bmp
-            zoomLevel = 1.0f
-            verticalOffset = 0.0f
-            reprocess()
+        if (uri != null) loadUriAndProcess(uri)
+    }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        val capturedUri = pendingCameraUri
+        if (success && capturedUri != null) {
+            loadUriAndProcess(capturedUri)
         }
     }
 
@@ -237,12 +259,20 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
                             Text(
                                 text = String.format(
                                     Locale.US,
-                                    "VERIFIED: %dx%d px • %.1f KB",
+                                    "VERIFIED: %dx%d px • %.1f KB • 300 DPI",
                                     res.width,
                                     res.height,
                                     res.finalSizeKb
                                 ),
                                 fontWeight = FontWeight.Bold,
+                                color = Color(0xFF1B873F),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        if (res.faceDetected && activeSpec.docType == DocType.PHOTO) {
+                            Text(
+                                text = "Face Biometric Auto-Centered ✅",
+                                style = MaterialTheme.typography.labelSmall,
                                 color = Color(0xFF1B873F)
                             )
                         }
@@ -250,8 +280,22 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
 
                     Spacer(Modifier.height(12.dp))
 
+                    // Camera + Gallery Action Buttons
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
+                            onClick = {
+                                val uri = ExactImageProcessor.createCameraCaptureUri(context)
+                                pendingCameraUri = uri
+                                cameraLauncher.launch(uri)
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.PhotoCamera, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Camera")
+                        }
+
+                        OutlinedButton(
                             onClick = {
                                 photoPicker.launch(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
@@ -259,34 +303,40 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
                             },
                             modifier = Modifier.weight(1f)
                         ) {
-                            Icon(Icons.Default.PhotoCamera, contentDescription = null)
-                            Spacer(Modifier.width(4.dp))
-                            Text(if (rawBitmap == null) "Pick Photo" else "Change")
+                            Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                            Spacer(Modifier.width(6.dp))
+                            Text("Gallery")
                         }
+                    }
 
-                        if (result != null) {
+                    if (result != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             FilledTonalButton(
                                 onClick = {
                                     val res = result ?: return@FilledTonalButton
-                                    val name = "${activeSpec.id}_${res.finalSizeKb.toInt()}KB.jpg"
+                                    val name = "${activeSpec.id.uppercase()}_${res.finalSizeKb.toInt()}KB.jpg"
                                     ExactImageProcessor.saveToGallery(context, res.bytes, name)
                                     Toast.makeText(context, "Saved to Pictures/PortalReady/$name", Toast.LENGTH_LONG).show()
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(Icons.Default.Download, contentDescription = null)
-                                Spacer(Modifier.width(4.dp))
-                                Text("Save")
+                                Spacer(Modifier.width(6.dp))
+                                Text("Save JPG")
                             }
 
-                            IconButton(
+                            FilledTonalButton(
                                 onClick = {
-                                    val res = result ?: return@IconButton
-                                    val name = "${activeSpec.id}_${res.finalSizeKb.toInt()}KB.jpg"
+                                    val res = result ?: return@FilledTonalButton
+                                    val name = "${activeSpec.id.uppercase()}_${res.finalSizeKb.toInt()}KB.jpg"
                                     ExactImageProcessor.shareImage(context, res.bytes, name)
-                                }
+                                },
+                                modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.Share, contentDescription = "Share")
+                                Icon(Icons.Default.Share, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text("Share")
                             }
                         }
                     }
@@ -294,40 +344,26 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
             }
         }
 
-        // 2. Interactive Framing & Enhancement Controls
+        // 2. AI Automation & Framing Controls
         item {
             Card(modifier = Modifier.fillMaxWidth()) {
                 Column(modifier = Modifier.padding(14.dp)) {
-                    if (rawBitmap != null) {
-                        Text(
-                            "Framing & Alignment",
-                            style = MaterialTheme.typography.labelLarge,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Zoom", modifier = Modifier.width(64.dp), style = MaterialTheme.typography.bodySmall)
-                            Slider(
-                                value = zoomLevel,
-                                onValueChange = { zoomLevel = it },
-                                onValueChangeFinished = { reprocess() },
-                                valueRange = 1.0f..2.2f,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Position", modifier = Modifier.width(64.dp), style = MaterialTheme.typography.bodySmall)
-                            Slider(
-                                value = verticalOffset,
-                                onValueChange = { verticalOffset = it },
-                                onValueChangeFinished = { reprocess() },
-                                valueRange = -1.0f..1.0f,
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                    }
-
                     if (activeSpec.docType == DocType.PHOTO) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Auto Face-Centering (75% Passport)")
+                                Text("Detects face & aligns head automatically", style = MaterialTheme.typography.bodySmall)
+                            }
+                            Switch(
+                                checked = enableAutoFaceCenter,
+                                onCheckedChange = { enableAutoFaceCenter = it; reprocess() }
+                            )
+                        }
+                        Spacer(Modifier.height(6.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -340,6 +376,7 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
                             )
                         }
                         if (activeSpec.supportsDateStamp) {
+                            Spacer(Modifier.height(6.dp))
                             OutlinedTextField(
                                 value = candidateName,
                                 onValueChange = { candidateName = it; reprocess() },
@@ -366,6 +403,35 @@ private fun PhotoAndSignatureTab(modifier: Modifier = Modifier) {
                             Switch(
                                 checked = enableSigClean,
                                 onCheckedChange = { enableSigClean = it; reprocess() }
+                            )
+                        }
+                    }
+
+                    if (rawBitmap != null) {
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                        Text(
+                            "Fine-Tune Framing",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Zoom", modifier = Modifier.width(64.dp), style = MaterialTheme.typography.bodySmall)
+                            Slider(
+                                value = zoomLevel,
+                                onValueChange = { zoomLevel = it },
+                                onValueChangeFinished = { reprocess() },
+                                valueRange = 1.0f..2.2f,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Position", modifier = Modifier.width(64.dp), style = MaterialTheme.typography.bodySmall)
+                            Slider(
+                                value = verticalOffset,
+                                onValueChange = { verticalOffset = it },
+                                onValueChangeFinished = { reprocess() },
+                                valueRange = -1.0f..1.0f,
+                                modifier = Modifier.weight(1f)
                             )
                         }
                     }
